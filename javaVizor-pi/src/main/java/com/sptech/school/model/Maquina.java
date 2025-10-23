@@ -1,4 +1,4 @@
-package com.sptech.school;
+package com.sptech.school.model;
 import java.util.ArrayList;
 
 public class Maquina {

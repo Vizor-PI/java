@@ -1,9 +1,10 @@
 package com.sptech.school;
+import com.sptech.school.model.Maquina;
+
 import java.time.LocalTime;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDate;
-import java.util.ArrayList;
 
 public class Main {
 
