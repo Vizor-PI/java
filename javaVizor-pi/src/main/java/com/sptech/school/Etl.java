@@ -1,119 +1,114 @@
 package com.sptech.school;
 
-import com.sptech.school.dao.ParametrosDAO;
-import com.sptech.school.dao.MiniComputadorDAO;
-import com.sptech.school.model.RegistroHardware;
-import com.sptech.school.factory.ConnectionFactory;
-
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.sql.Connection;
-import java.util.*;
+import java.nio.file.*;
+import java.sql.*;
 
 public class Etl {
 
     public void processarCSV(String caminhoEntrada) {
-        try (Connection conn = ConnectionFactory.getConnection()) {
+        String url = "jdbc:mysql://localhost:3306/vizor";
+        String user = "aluno";
+        String pass = "Sptech#2024";
 
-            if (conn == null) {
-                System.out.println("Erro: conexão não estabelecida.");
-                return;
+        try (Connection conn = DriverManager.getConnection(url, user, pass)) {
+            System.out.println("Conectado ao banco");
+
+            int cpuMax = 85, memMax = 85, discoMax = 85;
+            try (Statement stmt = conn.createStatement()) {
+                ResultSet rs = stmt.executeQuery("""
+                    SELECT c.nome, p.valorParametro
+                    FROM parametro p
+                    JOIN componente c ON p.fkComponente = c.id;
+                """);
+                while (rs.next()) {
+                    String nome = rs.getString("nome").toUpperCase();
+                    int valor = rs.getInt("valorParametro");
+                    if (nome.equals("CPU")) cpuMax = valor;
+                    else if (nome.equals("RAM")) memMax = valor;
+                    else if (nome.equals("DISCO")) discoMax = valor;
+                }
             }
 
-            ParametrosDAO parametroDAO = new ParametrosDAO();
-            parametroDAO.carregarParametros();
-
-            MiniComputadorDAO miniComputadorDAO = new MiniComputadorDAO(conn);
+            System.out.printf("Parametros: CPU=%d, RAM=%d, DISCO=%d%n", cpuMax, memMax, discoMax);
 
             File arquivo = new File(caminhoEntrada);
             if (!arquivo.exists()) {
-                System.out.println("Erro: arquivo não encontrado -> " + arquivo.getAbsolutePath());
+                System.out.println("Arquivo nao encontrado: " + arquivo.getAbsolutePath());
                 return;
             }
 
-            try (BufferedReader leitor = new BufferedReader(new FileReader(arquivo))) {
-                String cabecalho = leitor.readLine();
-                if (cabecalho == null) {
-                    System.out.println("Erro: CSV vazio.");
-                    return;
-                }
-
-                // Mapa para agrupar por empresa + máquina + data
-                Map<String, List<String>> grupos = new HashMap<>();
-
-                String linha;
-                while ((linha = leitor.readLine()) != null) {
-                    String[] campos = linha.split(",");
-
-                    RegistroHardware r = new RegistroHardware();
-                    r.setUser(campos[0]);
-                    r.setTimestamp(campos[1]);
-                    r.setCpu(Double.parseDouble(campos[2]));
-                    r.setMemoria(Double.parseDouble(campos[3]));
-                    r.setDisco(Double.parseDouble(campos[4]));
-                    r.setRede(Double.parseDouble(campos[5]));
-                    r.setProcessos(Double.parseDouble(campos[6]));
-                    r.setDataBoot(campos[7]);
-                    r.setUptime((int) Double.parseDouble(campos[8]));
-                    r.setIndoor((int) Double.parseDouble(campos[9]));
-
-                    String situacao = definirSituacao(r, parametroDAO);
-
-                    // Obtém empresa e data
-                    String empresa = miniComputadorDAO.buscarEmpresaPorCodigo(r.getUser());
-                    String data = r.getTimestamp().split(" ")[0];
-
-                    // Cria uma chave única por empresa/máquina/data
-                    String chave = empresa + "|" + r.getUser() + "|" + data;
-
-                    // Adiciona a linha formatada ao grupo correspondente
-                    grupos.computeIfAbsent(chave, k -> new ArrayList<>()).add(linha + "," + situacao);
-                }
-
-                // Agora escreve um arquivo para cada grupo
-                for (String chave : grupos.keySet()) {
-                    String[] partes = chave.split("\\|");
-                    String empresa = partes[0];
-                    String maquina = partes[1];
-                    String data = partes[2];
-
-                    String pastaDestino = "data/trusted/" + empresa + "/" + maquina + "/" + data + "/";
-                    Files.createDirectories(Paths.get(pastaDestino));
-
-                    String caminhoSaida = pastaDestino + "captura_dados_dooh.csv";
-
-                    try (BufferedWriter escritor = new BufferedWriter(new FileWriter(caminhoSaida))) {
-                        escritor.write(cabecalho + ",Situacao");
-                        escritor.newLine();
-                        for (String l : grupos.get(chave)) {
-                            escritor.write(l);
-                            escritor.newLine();
-                        }
-                    }
-
-                    System.out.println("Gerado: " + caminhoSaida);
-                }
-
-                System.out.println("✅ ETL finalizada com sucesso!");
+            BufferedReader leitor = new BufferedReader(new FileReader(arquivo));
+            String cabecalho = leitor.readLine();
+            if (cabecalho == null) {
+                System.out.println("CSV vazio");
+                leitor.close();
+                return;
             }
 
+            String linha;
+            while ((linha = leitor.readLine()) != null) {
+                // ignora linhas vazias ou com espacos
+                linha = linha.trim();
+                if (linha.isEmpty()) continue;
+
+                System.out.println("Linha lida: " + linha);
+
+
+                String[] campos = linha.split(",");
+                if (campos.length < 10) {
+                    System.out.println("Linha invalida: " + linha);
+                    continue;
+                }
+
+                String userId = campos[0];
+                String timestamp = campos[1];
+                double cpu = Double.parseDouble(campos[2]);
+                double mem = Double.parseDouble(campos[3]);
+                double disco = Double.parseDouble(campos[4]);
+                String data = timestamp.split(" ")[0];
+
+                String empresa = "ERRO";
+                try (PreparedStatement ps = conn.prepareStatement("""
+                    SELECT e.nome AS nomeEmpresa
+                    FROM miniComputador m
+                    JOIN lote l ON m.fkLote = l.id
+                    JOIN empresa e ON l.fkEmpresa = e.id
+                    WHERE m.codigo = ?;
+                """)) {
+                    ps.setString(1, userId);
+                    ResultSet rs = ps.executeQuery();
+                    if (rs.next()) empresa = rs.getString("nomeEmpresa");
+                }
+
+                String situacao;
+                if (cpu > cpuMax || mem > memMax || disco > discoMax) situacao = "Critico";
+                else if (cpu > 0.6 * cpuMax || mem > 0.6 * memMax || disco > 0.6 * discoMax) situacao = "Regular";
+                else situacao = "Otimo";
+
+                String pasta = "data/trusted/" + empresa + "/" + userId + "/" + data + "/";
+                Files.createDirectories(Paths.get(pasta));
+
+                String saida = pasta + "captura_dados_dooh.csv";
+                File arquivoSaida = new File(saida);
+                boolean novo = !arquivoSaida.exists();
+
+                try (BufferedWriter escritor = new BufferedWriter(new FileWriter(saida, true))) {
+                    if (novo) {
+                        escritor.write(cabecalho + ",Situacao");
+                        escritor.newLine();
+                    }
+                    escritor.write(linha + "," + situacao);
+                    escritor.newLine();
+                }
+
+                System.out.println("Gerado: " + saida);
+            }
+
+            leitor.close();
+            System.out.println("ETL finalizada");
         } catch (Exception e) {
             System.out.println("Erro na ETL: " + e.getMessage());
-        }
-    }
-
-    private String definirSituacao(RegistroHardware r, ParametrosDAO dao) {
-        double cpuMax = dao.getCpuMax();
-        double memMax = dao.getMemMax();
-        double discoMax = dao.getDiscoMax();
-
-        if (r.getCpu() > cpuMax || r.getMemoria() > memMax || r.getDisco() > discoMax) {
-            return "Crítico";
-        } else if (r.getCpu() > 0.6 * cpuMax || r.getMemoria() > 0.6 * memMax || r.getDisco() > 0.6 * discoMax) {
-            return "Regular";
-        } else {
-            return "Ótimo";
         }
     }
 }
