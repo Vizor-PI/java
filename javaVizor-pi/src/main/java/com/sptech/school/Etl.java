@@ -3,22 +3,30 @@ package com.sptech.school;
 import java.io.*;
 import java.nio.file.*;
 import java.sql.*;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
 
 public class Etl {
 
+    private final String baseOutputDir;
+    private final String jdbcUrl;
+    private final String dbUser;
+    private final String dbPass;
 
-
-
+    // Construtor que aceita base output (ex: "/tmp" no Lambda)
+    public Etl(String baseOutputDir, String jdbcUrl, String dbUser, String dbPass) {
+        this.baseOutputDir = baseOutputDir;
+        this.jdbcUrl = jdbcUrl;
+        this.dbUser = dbUser;
+        this.dbPass = dbPass;
+    }
 
     public void processarCSV(String caminhoEntrada) {
-        String url = "jdbc:mysql://localhost:3306/vizor";
-        String user = "root";
-        String pass = "mafalu09";
 
-        try (Connection conn = DriverManager.getConnection(url, user, pass)) {
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPass)) {
             System.out.println("Conectado ao banco");
 
-            int cpuMax = 85, memMax = 85, discoMax = 85;
+            int cpuMax = 85, memMax = 85, discoMax = 85, tempMax = 75;
             try (Statement stmt = conn.createStatement()) {
                 ResultSet rs = stmt.executeQuery("""
                     SELECT c.nome, p.valorParametro
@@ -31,10 +39,11 @@ public class Etl {
                     if (nome.equals("CPU")) cpuMax = valor;
                     else if (nome.equals("RAM")) memMax = valor;
                     else if (nome.equals("DISCO")) discoMax = valor;
+                    else if (nome.contains("TEMP")) tempMax = valor;
                 }
             }
 
-            System.out.printf("Parametros: CPU=%d, RAM=%d, DISCO=%d%n", cpuMax, memMax, discoMax);
+            System.out.printf("Parametros: CPU=%d, RAM=%d, DISCO=%d, TEMP=%d%n", cpuMax, memMax, discoMax, tempMax);
 
             File arquivo = new File(caminhoEntrada);
             if (!arquivo.exists()) {
@@ -50,6 +59,9 @@ public class Etl {
                 return;
             }
 
+            // Formatador para data BR
+            SimpleDateFormat sdfInput = new SimpleDateFormat("dd/MM/yyyy");
+
             String linha;
             while ((linha = leitor.readLine()) != null) {
                 // ignora linhas vazias ou com espacos
@@ -58,24 +70,38 @@ public class Etl {
 
                 System.out.println("Linha lida: " + linha);
 
+                // Campos do raw sao separados por ;
+                String[] campos = linha.split(";");
 
-                String[] campos = linha.split(",");
-                if (campos.length != 10) {
-                    System.out.println("Linha invalida: " + linha);
+                // RAW com 11 colunas
+                if (campos.length < 10) {
+                    System.out.println("Linha invalida (tamanho): " + linha);
                     continue;
                 }
-
 
                 // Campos que ja tem no CSV
                 String userId = campos[0];
                 String timestamp = campos[1];
-                double cpu = Double.parseDouble(campos[2]);
-                double mem = Double.parseDouble(campos[3]);
-                double disco = Double.parseDouble(campos[4]);
-                String data = timestamp.split(" ")[0];
-                String uptimeMin = campos[8];
-                String indoor = campos[9];
 
+                // Fomatação completa das colunas do CSV
+                // Replace de vírgula por ponto para conversão Double
+                double cpu = Double.parseDouble(campos[2].replace(",", "."));
+                double mem = Double.parseDouble(campos[3].replace(",", "."));
+                double disco = Double.parseDouble(campos[4].replace(",", "."));
+                String uptimeMin = campos[8];
+                double temp = Double.parseDouble(campos[9].replace(",", "."));
+                String indoor = campos.length > 10 ? campos[10] : "0";
+
+                String dataString = timestamp.split(" ")[0];
+                // Tratamento de Data para evitar Duplicidade no Banco
+                java.sql.Date dataSql;
+                try {
+                    java.util.Date date = sdfInput.parse(dataString);
+                    dataSql = new java.sql.Date(date.getTime());
+                } catch (Exception e) {
+                    System.out.println("Erro parse data: " + dataString);
+                    dataSql = new java.sql.Date(System.currentTimeMillis()); // Fallback para hoje
+                }
 
                 // Campos que precisam ser preenchidos com a busca no BD
                 String empresa = "ERRO";
@@ -125,10 +151,11 @@ public class Etl {
                 String situacao;
                 boolean deveCriarChamado = false;
 
-                if (cpu > cpuMax || mem > memMax || disco > discoMax) {
+                // Criando a variavel de situacao
+                if (cpu > cpuMax || mem > memMax || disco > discoMax || temp > tempMax) {
                     situacao = "Critico";
                     deveCriarChamado = true;
-                } else if (cpu > 0.7 * cpuMax || mem > 0.7 * memMax || disco > 0.7 * discoMax) {
+                } else if (cpu > 0.7 * cpuMax || mem > 0.7 * memMax || disco > 0.7 * discoMax || temp > 0.7 * tempMax) {
                     situacao = "Alerta";
                     deveCriarChamado = true;
                 } else {
@@ -147,7 +174,7 @@ public class Etl {
                         LIMIT 1;
                     """)) {
                         psCheck.setString(1, userId);
-                        psCheck.setDate(2, java.sql.Date.valueOf(data));
+                        psCheck.setDate(2, dataSql);
                         psCheck.setString(3, situacao);
                         ResultSet rs = psCheck.executeQuery();
                         chamadoJaExiste = rs.next();
@@ -168,6 +195,7 @@ public class Etl {
                             cpu,
                             mem,
                             disco,
+                            temp,
                             situacao,
                             timestamp
                     );
@@ -179,15 +207,20 @@ public class Etl {
                     VALUES (?, ?, ?);
                 """)) {
                         psInsert.setString(1, userId);
-                        psInsert.setDate(2, java.sql.Date.valueOf(data));
+                        psInsert.setDate(2, dataSql);
                         psInsert.setString(3, situacao);
                         psInsert.executeUpdate();
                         System.out.println("Registrado no MySQL que o chamado ja foi criado.");
                     }
                 }
 
-                // Criar pastas e arquivo de saída para cada pasta e data
-                String pasta = "data/trusted/" + empresa + "/" + userId + "/" + data + "/";
+                // Usar baseOutputDir ao invés de caminho fixo
+
+                // Limpeza de strings para evitar erros no Path
+                String empresaClean = empresa.replaceAll("[^a-zA-Z0-9.-]", "_");
+                String dataClean = dataString.replaceAll("/", "-");
+
+                String pasta = Paths.get(baseOutputDir, "trusted", empresaClean, userId, dataClean).toString() + File.separator;
                 Files.createDirectories(Paths.get(pasta));
 
                 String saida = pasta + "captura_dados_dooh.csv";
@@ -196,20 +229,28 @@ public class Etl {
 
                 try (BufferedWriter escritor = new BufferedWriter(new FileWriter(saida, true))) {
                     if (novo) {
-                        escritor.write(cabecalho + ",Situacao");
+                        // Cabeçalho com vírgula (Padrão Trusted) + Temperatura
+                        escritor.write("User,Timestamp,CPU,Memoria,Disco,Uptime,Temperatura,Indoor,Situacao");
                         escritor.newLine();
                     }
-                    escritor.write(linha + "," + situacao);
+
+
+                    // Padronização para vírgula no Trusted (formatando numeros decimais com ponto para não confundir com o separador de campos que é ",")
+                    String linhaFinal = String.format(Locale.US, "%s,%s,%.2f,%.2f,%.2f,%s,%.2f,%s,%s",
+                            userId, timestamp, cpu, mem, disco, uptimeMin, temp, indoor, situacao
+                    );
+
+                    escritor.write(linhaFinal);
                     escritor.newLine();
                 }
 
-                // Gerando JSON com os dados processados
                 String json = "{"
                         + "\"user\":\"" + userId + "\","
                         + "\"timestamp\":\"" + timestamp + "\","
                         + "\"cpu\":" + cpu + ","
                         + "\"memoria\":" + mem + ","
                         + "\"disco\":" + disco + ","
+                        + "\"temp\":" + temp + ","
                         + "\"uptime_min\":\"" + uptimeMin + "\","
                         + "\"indoor\":\"" + indoor + "\","
                         + "\"empresa\":\"" + empresa + "\","
@@ -219,7 +260,7 @@ public class Etl {
                         + "\"situacao\":\"" + situacao + "\""
                         + "}";
 
-                System.out.println("JSON GERADO: " + json);
+                System.out.println("JSON GERADO -> " + json);
                 System.out.println("Gerado: " + saida);
 
             }
@@ -228,6 +269,7 @@ public class Etl {
             System.out.println("ETL finalizada");
         } catch (Exception e) {
             System.out.println("Erro na ETL: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }

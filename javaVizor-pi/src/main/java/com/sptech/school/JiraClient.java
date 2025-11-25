@@ -10,9 +10,11 @@ import java.io.OutputStream;
 
 public class JiraClient {
 
-    private static final String JIRA_URL = "https://vizor.atlassian.net";
-    private static final String EMAIL = "lucas.aquino@sptech.school";
-    private static final String API_TOKEN = "";
+    // Lê da env vars
+    private static final String JIRA_URL = System.getenv().getOrDefault("JIRA_BASE_URL", "https://vizor.atlassian.net");
+    private static final String EMAIL = System.getenv().getOrDefault("JIRA_EMAIL", "lucas.aquino@sptech.school");
+    private static final String API_TOKEN = System.getenv().getOrDefault("JIRA_API_TOKEN", "");
+
 
     public static void criarChamado(
             String maquinaId,
@@ -25,15 +27,14 @@ public class JiraClient {
             double cpu,
             double mem,
             double disco,
+            double temp,
             String situacao,
             String timestamp
     ) {
         try {
-            // Endpoint correto para JIRA SERVICE MANAGEMENT
             URL url = new URL(JIRA_URL + "/rest/servicedeskapi/request");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
-            // Autenticação
             String auth = EMAIL + ":" + API_TOKEN;
             String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes());
 
@@ -43,17 +44,12 @@ public class JiraClient {
             conn.setRequestProperty("Accept", "application/json");
             conn.setDoOutput(true);
 
-            // Monta descrição com todos os campos vindo da ETL
             String description = String.format(
-                    "Máquina: %s\nEmpresa: %s\nModelo: %s\nLote: %s\nEndereço: %s\nIndoor: %s\nUptime (min): %s\nCPU: %.1f%%\nRAM: %.1f%%\nDisco: %.1f%%\nSituação: %s\nTimestamp: %s",
+                    "Máquina: %s\\nEmpresa: %s\\nModelo: %s\\nLote: %s\\nEndereço: %s\\nIndoor: %s\\nUptime (min): %s\\nTemp: %.1f°C\\nCPU: %.1f%%\\nRAM: %.1f%%\\nDisco: %.1f%%\\nSituação: %s\\nTimestamp: %s",
                     maquinaId, empresa, modelo, lote, enderecoTexto, indoor, uptimeMin,
-                    cpu, mem, disco, situacao, timestamp
+                    temp, cpu, mem, disco, situacao, timestamp
             );
 
-            // Quebras de linha para JSON
-            description = description.replace("\n", "\\n").replace("\"", "\\\"");
-
-            // JSON compatível com JSM
             String json = """
         {
           "serviceDeskId": "1",
@@ -76,12 +72,8 @@ public class JiraClient {
             int status = conn.getResponseCode();
             System.out.println("Status criação do chamado (Service Desk): " + status);
 
-            // Ler resposta do Jira (sucesso ou erro) e retornar se o chamado foi criado
             InputStream is = (status >= 200 && status < 300) ? conn.getInputStream() : conn.getErrorStream();
-            if (status == 201) {
-                System.out.println("Chamado criado com sucesso no Jira Service Desk.");
-            }
-            else if (is != null) {
+            if (is != null) {
                 BufferedReader br = new BufferedReader(new InputStreamReader(is));
                 StringBuilder response = new StringBuilder();
                 String line;
