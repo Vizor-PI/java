@@ -44,6 +44,15 @@ public class JiraClient {
             conn.setRequestProperty("Accept", "application/json");
             conn.setDoOutput(true);
 
+            // Aplicando SLA de acordo com nível do alerta
+            String prioridadeJira = "Medium"; // Padrão
+
+            if (situacao.equalsIgnoreCase("Critico")) {
+                prioridadeJira = "Highest"; // SLA de 12h
+            } else if (situacao.equalsIgnoreCase("Alerta")) {
+                prioridadeJira = "High";    // SLA de 24h
+            }
+
             String description = String.format(
                     "Máquina: %s\\nEmpresa: %s\\nModelo: %s\\nLote: %s\\nEndereço: %s\\nIndoor: %s\\nUptime (min): %s\\nTemp: %.1f°C\\nCPU: %.1f%%\\nRAM: %.1f%%\\nDisco: %.1f%%\\nSituação: %s\\nTimestamp: %s",
                     maquinaId, empresa, modelo, lote, enderecoTexto, indoor, uptimeMin,
@@ -56,13 +65,15 @@ public class JiraClient {
           "requestTypeId": "1",
           "requestFieldValues": {
             "summary": "%s - Máquina %s",
-            "description": "%s"
+            "description": "%s",
+            "priority": { "name": "%s" }
           }
         }
         """.formatted(
                     situacao.toUpperCase(),
                     maquinaId,
-                    description
+                    description,
+                    prioridadeJira
             );
 
             try (OutputStream os = conn.getOutputStream()) {
