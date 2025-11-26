@@ -53,6 +53,17 @@ public class JiraClient {
                 prioridadeJira = "High";    // SLA de 24h
             }
 
+            // Criando "etiqueta" para plottar a área do incidente no dashboard
+            String etiquetaArea = "infraestrutura"; // Padrão
+
+            if (disco >= 85.0) {
+                etiquetaArea = "banco_de_dados"; // Disco cheio = banco/log
+            } else if (cpu >= 90.0 || temp >= 75.0) {
+                etiquetaArea = "infraestrutura"; // Superaquecimento/Processamento
+            } else if (mem >= 85.0) {
+                etiquetaArea = "aplicacoes"; // Memory cheia = software
+            }
+
             String description = String.format(
                     "Máquina: %s\\nEmpresa: %s\\nModelo: %s\\nLote: %s\\nEndereço: %s\\nIndoor: %s\\nUptime (min): %s\\nTemp: %.1f°C\\nCPU: %.1f%%\\nRAM: %.1f%%\\nDisco: %.1f%%\\nSituação: %s\\nTimestamp: %s",
                     maquinaId, empresa, modelo, lote, enderecoTexto, indoor, uptimeMin,
@@ -66,14 +77,16 @@ public class JiraClient {
           "requestFieldValues": {
             "summary": "%s - Máquina %s",
             "description": "%s",
-            "priority": { "name": "%s" }
+            "priority": { "name": "%s" },
+            "labels": ["%s"]
           }
         }
         """.formatted(
                     situacao.toUpperCase(),
                     maquinaId,
                     description,
-                    prioridadeJira
+                    prioridadeJira,
+                    etiquetaArea
             );
 
             try (OutputStream os = conn.getOutputStream()) {

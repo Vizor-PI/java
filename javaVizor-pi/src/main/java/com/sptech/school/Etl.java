@@ -108,6 +108,8 @@ public class Etl {
                 String lote = "";
                 String modelo = "";
                 String enderecoTexto = "";
+                String latitude = "0.0";
+                String longitude = "0.0";
 
                 // Buscar dados adicionais no banco
                 try (PreparedStatement ps = conn.prepareStatement("""
@@ -118,7 +120,9 @@ public class Etl {
                            en.numero,
                            en.bairro,
                            z.zona,
-                           c.nome AS cidade
+                           c.nome AS cidade,
+                           en.latitude,
+                           en.longitude
                     FROM miniComputador mc
                     JOIN lote l ON mc.fkLote = l.id
                     JOIN empresa e ON l.fkEmpresa = e.id
@@ -137,6 +141,10 @@ public class Etl {
                         empresa = rs.getString("empresa");
                         lote = rs.getString("lote");
                         modelo = rs.getString("modelo");
+
+                        // Usando rs.getString pois no SQL lat e long são DECIMAL
+                        latitude = rs.getString("latitude");
+                        longitude = rs.getString("longitude");
 
                         // Montando o endereco completo
                         enderecoTexto = rs.getString("rua") + ", "
@@ -229,15 +237,14 @@ public class Etl {
 
                 try (BufferedWriter escritor = new BufferedWriter(new FileWriter(saida, true))) {
                     if (novo) {
-                        // Cabeçalho com vírgula (Padrão Trusted) + Temperatura
-                        escritor.write("User,Timestamp,CPU,Memoria,Disco,Uptime,Temperatura,Indoor,Situacao");
+                        // Cabeçalho trusted
+                        escritor.write("User,Timestamp,CPU,Memoria,Disco,Uptime,Temperatura,Indoor,Situacao,Latitude,Longitude");
                         escritor.newLine();
                     }
 
-
-                    // Padronização para vírgula no Trusted (formatando numeros decimais com ponto para não confundir com o separador de campos que é ",")
-                    String linhaFinal = String.format(Locale.US, "%s,%s,%.2f,%.2f,%.2f,%s,%.2f,%s,%s",
-                            userId, timestamp, cpu, mem, disco, uptimeMin, temp, indoor, situacao
+                    // Linha final formatada do trusted
+                    String linhaFinal = String.format(Locale.US, "%s,%s,%.2f,%.2f,%.2f,%s,%.2f,%s,%s,%s,%s",
+                            userId, timestamp, cpu, mem, disco, uptimeMin, temp, indoor, situacao, latitude, longitude
                     );
 
                     escritor.write(linhaFinal);
@@ -251,6 +258,8 @@ public class Etl {
                         + "\"memoria\":" + mem + ","
                         + "\"disco\":" + disco + ","
                         + "\"temp\":" + temp + ","
+                        + "\"latitude\":\"" + latitude + "\","
+                        + "\"longitude\":\"" + longitude + "\","
                         + "\"uptime_min\":\"" + uptimeMin + "\","
                         + "\"indoor\":\"" + indoor + "\","
                         + "\"empresa\":\"" + empresa + "\","
